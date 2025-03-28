@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis';
 import { NextResponse } from 'next/server';
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 // Initialize Redis client
 const redis = new Redis({
