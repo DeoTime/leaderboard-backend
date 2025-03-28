@@ -1,59 +1,128 @@
-import { Redis } from '@upstash/redis';
-import { NextResponse } from 'next/server';
-import { SpeedInsights } from "@vercel/speed-insights/next"
+import { NextResponse } from "next/server"
+import { Redis } from "@upstash/redis"
 
-// Initialize Redis client
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+// Initialize Redis client using environment variables
+const redis = Redis.fromEnv()
 
-// POST handler to add a new score
 export async function POST(request) {
   try {
     // Parse the request body
-    const body = await request.json();
-    
-    // Validate the input
-    if (!body.name || typeof body.name !== 'string' || body.name.length > 50) {
+    const body = await request.json()
+    const { name, score, timestamp } = body
+
+    console.log("Received score submission:", { name, score, timestamp })
+
+    // Validate required fields
+    if (!name || score === undefined) {
+      console.log("Missing required fields")
       return NextResponse.json(
-        { success: false, error: 'Invalid name' },
-        { status: 400 }
-      );
+        { success: false, error: "Name and score are required" },
+        {
+          status: 400,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+          },
+        },
+      )
     }
-    
-    if (isNaN(body.score) || body.score < 0) {
+
+    // Sanitize name and validate score
+    const sanitizedName = name.trim().substring(0, 50)
+    const numericScore = Number.parseInt(String(score), 10)
+
+    if (isNaN(numericScore) || numericScore < 0) {
+      console.log("Invalid score value")
       return NextResponse.json(
-        { success: false, error: 'Invalid score' },
-        { status: 400 }
-      );
+        { success: false, error: "Score must be a positive number" },
+        {
+          status: 400,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+          },
+        },
+      )
     }
-    
-    // Create a user data object
-    const userData = {
-      username: body.name.trim(),
-      timestamp: body.timestamp || new Date().toISOString(),
-      avatarUrl: body.avatarUrl || null
-    };
-    
-    // Store in Redis sorted set (scores as the key, score as the sort value)
-    // This automatically maintains the leaderboard order
-    await redis.zadd('scores', {
-      score: Math.floor(body.score),
-      member: JSON.stringify(userData)
-    });
-    
-    // Return success response
-    return NextResponse.json({ 
-      success: true, 
-      message: 'Score submitted successfully' 
-    });
-    
-  } catch (error) {
-    console.error('Error processing score submission:', error);
+
+    // Check if user already exists and only update if new score is higher
+    const existingData = await redis.hget("scores", sanitizedName)
+    let shouldUpdate = true
+
+    if (existingData) {
+      try {
+        const existingUser = typeof existingData === "string" ? JSON.parse(existingData) : existingData
+        if (existingUser.score >= numericScore) {
+          shouldUpdate = false
+          console.log("Existing score is higher, not updating")
+        }
+      } catch (err) {
+        console.error("Error parsing existing user data:", err)
+        // Continue with update if we can't parse existing data
+      }
+    }
+
+    if (shouldUpdate) {
+      // Store the score in Redis
+      const userData = {
+        score: numericScore,
+        timestamp: timestamp || new Date().toISOString(),
+      }
+
+      console.log(`Storing score for ${sanitizedName}:`, userData)
+
+      await redis.hset("scores", {
+        [sanitizedName]: JSON.stringify(userData),
+      })
+
+      console.log("Score saved successfully")
+    }
+
     return NextResponse.json(
-      { success: false, error: 'Server error processing request' },
-      { status: 500 }
-    );
+      {
+        success: true,
+        message: shouldUpdate ? "Score saved successfully" : "Existing score is higher",
+      },
+      {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      },
+    )
+  } catch (error) {
+    console.error("Error saving score:", error)
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Failed to save score",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      {
+        status: 500,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      },
+    )
   }
 }
+
+export async function OPTIONS() {
+  return NextResponse.json(
+    {},
+    {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    },
+  )
+}
+
