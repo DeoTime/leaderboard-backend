@@ -1,128 +1,65 @@
-import { NextResponse } from "next/server"
-import { Redis } from "@upstash/redis"
+import { Redis } from '@upstash/redis';
+import { NextResponse } from 'next/server';
 
-// Initialize Redis client using environment variables
-const redis = Redis.fromEnv()
+// Initialize Redis client
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 export async function POST(request) {
   try {
     // Parse the request body
-    const body = await request.json()
-    const { name, score, timestamp } = body
+    const body = await request.json();
 
-    console.log("Received score submission:", { name, score, timestamp })
-
-    // Validate required fields
-    if (!name || score === undefined) {
-      console.log("Missing required fields")
-      return NextResponse.json(
-        { success: false, error: "Name and score are required" },
-        {
-          status: 400,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          },
-        },
-      )
+    // Validate the input
+    if (!body.name || typeof body.name !== "string" || body.name.length > 50) {
+      return NextResponse.json({ success: false, error: "Invalid name" }, { status: 400 });
     }
 
-    // Sanitize name and validate score
-    const sanitizedName = name.trim().substring(0, 50)
-    const numericScore = Number.parseInt(String(score), 10)
-
-    if (isNaN(numericScore) || numericScore < 0) {
-      console.log("Invalid score value")
-      return NextResponse.json(
-        { success: false, error: "Score must be a positive number" },
-        {
-          status: 400,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-          },
-        },
-      )
+    if (isNaN(body.score) || body.score < 0) {
+      return NextResponse.json({ success: false, error: "Invalid score" }, { status: 400 });
     }
 
-    // Check if user already exists and only update if new score is higher
-    const existingData = await redis.hget("scores", sanitizedName)
-    let shouldUpdate = true
+    // Create a new score entry
+    const userData = {
+      username: body.name.trim(),
+      timestamp: body.timestamp || new Date().toISOString()
+    };
 
-    if (existingData) {
-      try {
-        const existingUser = typeof existingData === "string" ? JSON.parse(existingData) : existingData
-        if (existingUser.score >= numericScore) {
-          shouldUpdate = false
-          console.log("Existing score is higher, not updating")
-        }
-      } catch (err) {
-        console.error("Error parsing existing user data:", err)
-        // Continue with update if we can't parse existing data
-      }
+    // Add to Redis sorted set
+    await redis.zadd('scores', {
+      score: Math.floor(body.score),
+      member: JSON.stringify(userData)
+    });
+
+    // If it's within the last week, also add to weekly scores
+    const now = new Date();
+    const timestamp = body.timestamp ? new Date(body.timestamp) : now;
+    const oneWeekAgo = new Date(now);
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    
+    if (timestamp >= oneWeekAgo) {
+      await redis.zadd('weekly_scores', {
+        score: Math.floor(body.score),
+        member: JSON.stringify(userData)
+      });
     }
 
-    if (shouldUpdate) {
-      // Store the score in Redis
-      const userData = {
-        score: numericScore,
-        timestamp: timestamp || new Date().toISOString(),
-      }
-
-      console.log(`Storing score for ${sanitizedName}:`, userData)
-
-      await redis.hset("scores", {
-        [sanitizedName]: JSON.stringify(userData),
-      })
-
-      console.log("Score saved successfully")
-    }
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: shouldUpdate ? "Score saved successfully" : "Existing score is higher",
-      },
-      {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
-      },
-    )
+    // Return success response
+    return NextResponse.json({
+      success: true,
+      message: "Score submitted successfully",
+    });
   } catch (error) {
-    console.error("Error saving score:", error)
+    console.error("Error processing score submission:", error);
     return NextResponse.json(
       {
         success: false,
-        error: "Failed to save score",
-        message: error instanceof Error ? error.message : "Unknown error",
+        error: "Server error processing request",
+        details: error.message
       },
-      {
-        status: 500,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        },
-      },
-    )
+      { status: 500 },
+    );
   }
 }
-
-export async function OPTIONS() {
-  return NextResponse.json(
-    {},
-    {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    },
-  )
-}
-

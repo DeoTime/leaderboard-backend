@@ -15,22 +15,52 @@ export async function GET(request) {
     const timeFrame = searchParams.get('timeFrame') || 'allTime';
     
     // Get all scores from Redis
-    let scores = await redis.zrange('scores', 0, -1, { withScores: true, rev: true });
+    let scores = [];
+    
+    try {
+      // Use different keys based on timeFrame
+      const redisKey = timeFrame === 'weekly' ? 'weekly_scores' : 'scores';
+      scores = await redis.zrange(redisKey, 0, -1, { withScores: true, rev: true });
+      
+      // If scores is undefined or not an array, initialize it as an empty array
+      if (!scores || !Array.isArray(scores)) {
+        console.log('No scores found or invalid response from Redis');
+        scores = [];
+      }
+    } catch (redisError) {
+      console.error('Redis error:', redisError);
+      scores = [];
+    }
     
     // Convert the scores to a more usable format
     let contributors = [];
     
-    for (let i = 0; i < scores.length; i += 2) {
-      try {
-        const userData = JSON.parse(scores[i]);
-        contributors.push({
-          username: userData.username,
-          score: parseInt(scores[i + 1]),
-          timestamp: userData.timestamp,
-          avatarUrl: userData.avatarUrl || null
-        });
-      } catch (e) {
-        console.error('Error parsing user data:', e);
+    // Only process if we have scores and they're in the expected format
+    if (scores.length > 0) {
+      for (let i = 0; i < scores.length; i += 2) {
+        try {
+          // Handle both string and object formats
+          let userData;
+          if (typeof scores[i] === 'string') {
+            try {
+              userData = JSON.parse(scores[i]);
+            } catch (e) {
+              // If it's not valid JSON, use it as a username
+              userData = { username: scores[i] };
+            }
+          } else {
+            userData = scores[i];
+          }
+          
+          contributors.push({
+            username: userData.username || 'Anonymous',
+            score: parseInt(scores[i + 1] || 0),
+            date: userData.timestamp || new Date().toISOString(),
+            avatarUrl: userData.avatarUrl || null
+          });
+        } catch (e) {
+          console.error('Error parsing user data:', e);
+        }
       }
     }
     
