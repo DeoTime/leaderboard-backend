@@ -8,7 +8,7 @@ export function middleware(request) {
   const response = NextResponse.next();
   
   // Add CORS headers to the response
-  response.headers.set('Access-Control-Allow-Origin', origin);
+  response.headers.set('Access-Control-Allow-Origin', '*');  // Change to specific origin in production
   response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   response.headers.set('Access-Control-Max-Age', '86400');
@@ -16,7 +16,9 @@ export function middleware(request) {
   return response;
 }
 
-// Only apply this middleware to API routes
-export const config = {
-  matcher: '/api/:path*',
-};
+// Also handle OPTIONS requests for preflight
+export function config() {
+  return {
+    matcher: '/api/:path*',
+  };
+}
